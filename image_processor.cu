@@ -282,7 +282,88 @@ std::vector<float> ImageProcessor::createPaddedImage(int paddingY, int paddingX)
 bool ImageProcessor::applyFilterParallel(
     ImageProcessor& output, const FilterKernel& filter, const CudaMemoryType memType)
 {
-    // ... [resto del codice con commenti inline] ...
+    int kernelSize = filter.getSize();
+    if (kernelSize > MAX_KERNEL_SIZE) {
+        std::cerr << "Dimensione kernel troppo grande" << std::endl;
+        return false;
+    }
+
+    int radius = kernelSize / 2;
+    auto padded = createPaddedImage(radius, radius);
+    int paddedWidth = width + 2 * radius;
+    int paddedHeight = height + 2 * radius;
+
+    // Alloca memoria su GPU
+    float* d_input, * d_output, * d_kernel = nullptr;
+    cudaMalloc(&d_input, paddedWidth * paddedHeight * sizeof(float));
+    cudaMalloc(&d_output, width * height * sizeof(float));
+
+    // Copia i dati sulla GPU
+    cudaMemcpy(d_input, padded.data(),
+        paddedWidth * paddedHeight * sizeof(float),
+        cudaMemcpyHostToDevice);
+
+    // Prepara i parametri per il kernel CUDA
+    dim3 blockSize(BLOCK_DIM_X, BLOCK_DIM_Y);
+    dim3 gridSize(
+        calcolaBlocchi(width, BLOCK_DIM_X),
+        calcolaBlocchi(height, BLOCK_DIM_Y)
+    );
+
+    // Esegui il kernel appropriato
+    if (memType == CudaMemoryType::GLOBAL_MEM) {
+        cudaMalloc(&d_kernel, kernelSize * kernelSize * sizeof(float));
+        cudaMemcpy(d_kernel, filter.getKernelData().data(),
+            kernelSize * kernelSize * sizeof(float),
+            cudaMemcpyHostToDevice);
+
+        processaImmagineGlobale << <gridSize, blockSize >> > (
+            d_input, d_output, d_kernel,
+            width, height, paddedWidth, paddedHeight,
+            kernelSize
+            );
+    }
+    else if (memType == CudaMemoryType::SHARED_MEM) {
+        cudaMemcpyToSymbol(d_filterKernel, filter.getKernelData().data(),
+            kernelSize * kernelSize * sizeof(float));
+
+        processaImmagineShared<BLOCK_DIM_X> << <gridSize, blockSize >> > (
+            d_input, d_output,
+            width, height, paddedWidth, paddedHeight,
+            kernelSize
+            );
+    }
+    else {  // CONSTANT_MEM
+        cudaMemcpyToSymbol(d_filterKernel, filter.getKernelData().data(),
+            kernelSize * kernelSize * sizeof(float));
+
+        processaImmagineConstante << <gridSize, blockSize >> > (
+            d_input, d_output,
+            width, height, paddedWidth, paddedHeight,
+            kernelSize
+            );
+    }
+
+    // Verifica errori
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        std::cerr << "Errore CUDA: " << cudaGetErrorString(error) << std::endl;
+        return false;
+    }
+
+    // Copia il risultato indietro
+    std::vector<float> result(width * height);
+    cudaMemcpy(result.data(), d_output,
+        width * height * sizeof(float),
+        cudaMemcpyDeviceToHost);
+
+    // Pulisci la memoria
+    cudaFree(d_input);
+    cudaFree(d_output);
+    if (d_kernel) cudaFree(d_kernel);
+
+    output.setImageData(result, width, height);
+    return true;
 }
 
 /**
@@ -298,7 +379,92 @@ bool ImageProcessor::applyFilterParallelWithTimings(
     double& computationTime,
     double& transferTime)
 {
-    // ... [resto del codice con commenti inline] ...
+    int kernelSize = filter.getSize();
+    int radius = kernelSize / 2;
+    auto padded = createPaddedImage(radius, radius);
+    int paddedWidth = width + 2 * radius;
+    int paddedHeight = height + 2 * radius;
+
+    // Alloca memoria su GPU
+    float* d_input, * d_output, * d_kernel = nullptr;
+
+    auto transferStart = std::chrono::high_resolution_clock::now();
+
+    cudaMalloc(&d_input, paddedWidth * paddedHeight * sizeof(float));
+    cudaMalloc(&d_output, width * height * sizeof(float));
+
+    // Copia i dati sulla GPU
+    cudaMemcpy(d_input, padded.data(),
+        paddedWidth * paddedHeight * sizeof(float),
+        cudaMemcpyHostToDevice);
+
+    auto computeStart = std::chrono::high_resolution_clock::now();
+
+    // Prepara i parametri per il kernel CUDA
+    dim3 blockSize(BLOCK_DIM_X, BLOCK_DIM_Y);
+    dim3 gridSize(
+        calcolaBlocchi(width, BLOCK_DIM_X),
+        calcolaBlocchi(height, BLOCK_DIM_Y)
+    );
+
+    // Esegui il kernel appropriato
+    if (memType == CudaMemoryType::GLOBAL_MEM) {
+        cudaMalloc(&d_kernel, kernelSize * kernelSize * sizeof(float));
+        cudaMemcpy(d_kernel, filter.getKernelData().data(),
+            kernelSize * kernelSize * sizeof(float),
+            cudaMemcpyHostToDevice);
+
+        processaImmagineGlobale << <gridSize, blockSize >> > (
+            d_input, d_output, d_kernel,
+            width, height, paddedWidth, paddedHeight,
+            kernelSize
+            );
+    }
+    else if (memType == CudaMemoryType::SHARED_MEM) {
+        cudaMemcpyToSymbol(d_filterKernel, filter.getKernelData().data(),
+            kernelSize * kernelSize * sizeof(float));
+
+        processaImmagineShared<BLOCK_DIM_X> << <gridSize, blockSize >> > (
+            d_input, d_output,
+            width, height, paddedWidth, paddedHeight,
+            kernelSize
+            );
+    }
+    else {  // CONSTANT_MEM
+        cudaMemcpyToSymbol(d_filterKernel, filter.getKernelData().data(),
+            kernelSize * kernelSize * sizeof(float));
+
+        processaImmagineConstante << <gridSize, blockSize >> > (
+            d_input, d_output,
+            width, height, paddedWidth, paddedHeight,
+            kernelSize
+            );
+    }
+
+    cudaDeviceSynchronize();
+    auto computeEnd = std::chrono::high_resolution_clock::now();
+
+    // Copia il risultato indietro
+    std::vector<float> result(width * height);
+    cudaMemcpy(result.data(), d_output,
+        width * height * sizeof(float),
+        cudaMemcpyDeviceToHost);
+
+    auto transferEnd = std::chrono::high_resolution_clock::now();
+
+    // Calcola i tempi
+    computationTime = std::chrono::duration_cast<std::chrono::microseconds>(
+        computeEnd - computeStart).count();
+    transferTime = std::chrono::duration_cast<std::chrono::microseconds>(
+        transferEnd - transferStart).count() - computationTime;
+
+    // Pulisci la memoria
+    cudaFree(d_input);
+    cudaFree(d_output);
+    if (d_kernel) cudaFree(d_kernel);
+
+    output.setImageData(result, width, height);
+    return true;
 }
 
 // Implementazione dei metodi getter/setter base

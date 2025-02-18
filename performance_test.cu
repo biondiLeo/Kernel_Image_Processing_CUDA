@@ -201,7 +201,103 @@ public:
 
         // Esegue i test per ogni immagine
         for (const auto& imageInfo : imageFiles) {
-            // ... [resto del codice con commenti inline] ...
+            std::cout << "\nProcessing " << imageInfo.first << " ("
+                << imageInfo.second.first << "x" << imageInfo.second.second << ")...\n";
+
+            ImageProcessor inputImage;
+            if (!inputImage.loadImageFromFile(imageInfo.first.c_str())) {
+                std::cout << "Errore nel caricamento dell'immagine, skip...\n";
+                continue;
+            }
+
+            for (int kernelSize : kernelSizes) {
+                std::cout << "  Kernel " << kernelSize << "x" << kernelSize << "...\n";
+
+                FilterKernel filter;
+                filter.createGaussianFilter(kernelSize, 1.0f);
+
+                // Variabili per i tempi
+                double computationTime, transferTime;
+
+                // Test sequenziale
+                double seqTime = runSingleTest(inputImage, filter, "Sequential", computationTime, transferTime);
+                TestResult seqResult = {
+                    imageInfo.second.first,
+                    imageInfo.second.second,
+                    kernelSize,
+                    0,
+                    "Sequential",
+                    seqTime,
+                    computationTime,
+                    transferTime,
+                    1.0  // Speedup base
+                };
+                allResults.push_back(seqResult);
+
+                // Test CUDA Global Memory
+                double cudaGlobalTime = runSingleTest(inputImage, filter, "CUDA_Global", computationTime, transferTime);
+                TestResult cudaGlobalResult = {
+                    imageInfo.second.first,
+                    imageInfo.second.second,
+                    kernelSize,
+                    0,
+                    "CUDA_Global",
+                    cudaGlobalTime,
+                    computationTime,
+                    transferTime,
+                    seqTime / cudaGlobalTime
+                };
+                allResults.push_back(cudaGlobalResult);
+
+                // Test CUDA Constant Memory
+                double cudaConstTime = runSingleTest(inputImage, filter, "CUDA_Constant", computationTime, transferTime);
+                TestResult cudaConstResult = {
+                    imageInfo.second.first,
+                    imageInfo.second.second,
+                    kernelSize,
+                    0,
+                    "CUDA_Constant",
+                    cudaConstTime,
+                    computationTime,
+                    transferTime,
+                    seqTime / cudaConstTime
+                };
+                allResults.push_back(cudaConstResult);
+
+                // Test CUDA Shared Memory
+                double cudaSharedTime = runSingleTest(inputImage, filter, "CUDA_Shared", computationTime, transferTime);
+                TestResult cudaSharedResult = {
+                    imageInfo.second.first,
+                    imageInfo.second.second,
+                    kernelSize,
+                    0,
+                    "CUDA_Shared",
+                    cudaSharedTime,
+                    computationTime,
+                    transferTime,
+                    seqTime / cudaSharedTime
+                };
+                allResults.push_back(cudaSharedResult);
+
+                // Test OpenMP con diversi numeri di thread
+                for (int threads : threadCounts) {
+                    double ompTime = runSingleTest(inputImage, filter, "OpenMP", computationTime, transferTime, threads);
+                    TestResult ompResult = {
+                        imageInfo.second.first,
+                        imageInfo.second.second,
+                        kernelSize,
+                        threads,
+                        "OpenMP",
+                        ompTime,
+                        computationTime,
+                        transferTime,
+                        seqTime / ompTime
+                    };
+                    allResults.push_back(ompResult);
+                }
+
+                std::cout << "    Completato\n";
+            }
         }
 
         // Salva i risultati
