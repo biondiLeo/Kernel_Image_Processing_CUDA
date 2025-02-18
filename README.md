@@ -1,4 +1,4 @@
-# Kernel Image Processing in C++/CUDA
+# Kernel Image Processing in C++/OpenMP/CUDA
 
 This project implements and analyzes three different approaches to kernel image processing: sequential C++, parallel OpenMP for CPU, and CUDA for GPU acceleration.
 
