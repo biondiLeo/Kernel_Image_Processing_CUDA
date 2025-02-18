@@ -10,22 +10,36 @@
 #include <cuda_runtime_api.h>
 #include <device_launch_parameters.h>
 
-// Definizione delle stringhe di comando
-#define CMD_GAUSSIAN     "gaussian"
-#define CMD_SHARPEN      "sharpen"
-#define CMD_EDGE         "edge"
-#define CMD_LAPLACIAN    "laplacian"
-#define CMD_DOG          "dog"
+/**
+ * Definizione delle costanti per i comandi dell'applicazione
+ */
+ // Tipi di filtro disponibili
+#define CMD_GAUSSIAN     "gaussian"    // Filtro di sfocatura gaussiana
+#define CMD_SHARPEN      "sharpen"     // Filtro di nitidezza
+#define CMD_EDGE         "edge"        // Rilevamento bordi
+#define CMD_LAPLACIAN    "laplacian"   // Filtro laplaciano
+#define CMD_DOG          "dog"         // Difference of Gaussian
 
-#define CMD_CUDA_GLOBAL  "global"
-#define CMD_CUDA_CONST   "constant"
-#define CMD_CUDA_SHARED  "shared"
+// Tipi di memoria CUDA disponibili
+#define CMD_CUDA_GLOBAL  "global"      // Memoria globale GPU
+#define CMD_CUDA_CONST   "constant"    // Memoria costante GPU
+#define CMD_CUDA_SHARED  "shared"      // Memoria condivisa GPU
 
-#define OUTPUT_DIR       "output/"
-#define IMG_EXT         ".png"
+// Costanti per la gestione dei file
+#define OUTPUT_DIR       "output/"     // Directory per i file di output
+#define IMG_EXT         ".png"         // Estensione dei file immagine
 
+/**
+ * @brief Programma principale per l'elaborazione delle immagini
+ *
+ * Implementa un'applicazione di confronto tra diverse tecniche
+ * di elaborazione immagini: sequenziale (CPU), parallela (CUDA)
+ * e multi-thread (OpenMP).
+ *
+ * Utilizzo: program tipo_filtro percorso_immagine [tipo_memoria_cuda]
+ */
 int main(int argc, char** argv) {
-    // Verifica parametri di input
+    // Verifica i parametri di input
     if (argc < 3) {
         std::cerr << "Utilizzo: " << argv[0] << " tipo_filtro percorso_immagine [tipo_memoria_cuda]" << std::endl;
         std::cerr << "tipo_filtro: <gaussian | sharpen | edge | laplacian | dog>" << std::endl;
@@ -34,14 +48,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Parsing dei parametri da linea di comando
     std::string cmdFilter = std::string(argv[1]);
     std::string imagePath = std::string(argv[2]);
     std::string cudaMemType = (argc > 3) ? std::string(argv[3]) : CMD_CUDA_CONST;
 
-    // Crea e configura il filtro
+    /**
+     * Configurazione del filtro
+     * Crea il filtro specificato con i parametri appropriati
+     */
     FilterKernel filter;
     if (cmdFilter == CMD_GAUSSIAN) {
-        filter.createGaussianFilter(7, 1.0f);
+        filter.createGaussianFilter(7, 1.0f);  // Kernel 7x7, sigma=1.0
     }
     else if (cmdFilter == CMD_SHARPEN) {
         filter.createSharpeningFilter();
@@ -59,23 +77,29 @@ int main(int argc, char** argv) {
         std::cerr << "Tipo di filtro non valido: " << cmdFilter << std::endl;
         return 1;
     }
-    // Mostra il filtro selezionato
+
+    // Visualizza il kernel del filtro selezionato
     std::cout << "\nFiltro selezionato: " << cmdFilter << std::endl;
     filter.displayKernel();
 
-    // Carica l'immagine
+    /**
+     * Caricamento dell'immagine di input
+     */
     ImageProcessor inputImage;
     if (!inputImage.loadImageFromFile(imagePath.c_str())) {
         std::cerr << "Errore nel caricamento dell'immagine: " << imagePath << std::endl;
         return 1;
     }
 
-    // Crea le immagini di output
+    // Preparazione degli oggetti per i risultati
     ImageProcessor outputCUDA;
     ImageProcessor outputCPU;
     std::vector<ImageProcessor> outputsOpenMP;
 
-    // === Sezione Elaborazione Sequenziale ===
+    /**
+     * Test Elaborazione Sequenziale (CPU)
+     * Misura il tempo di esecuzione dell'elaborazione sequenziale
+     */
     std::cout << "\n=== Versione Sequenziale ===" << std::endl;
     auto t1 = std::chrono::high_resolution_clock::now();
     bool cpuResult = inputImage.applyFilterSequential(outputCPU, filter);
@@ -88,9 +112,12 @@ int main(int argc, char** argv) {
         outputCPU.saveImageToFile(outputCpuPath.c_str());
     }
 
-    // === Sezione Elaborazione CUDA ===
+    /**
+     * Test Elaborazione CUDA (GPU)
+     * Configura ed esegue l'elaborazione parallela su GPU
+     */
     std::cout << "\n=== Versione Parallela CUDA ===" << std::endl;
-    // Determina il tipo di memoria CUDA da usare
+    // Determina il tipo di memoria CUDA da utilizzare
     CudaMemoryType memType = CudaMemoryType::CONSTANT_MEM;
     if (cudaMemType == CMD_CUDA_GLOBAL) {
         memType = CudaMemoryType::GLOBAL_MEM;
@@ -99,8 +126,10 @@ int main(int argc, char** argv) {
         memType = CudaMemoryType::SHARED_MEM;
     }
 
-    // Inizializza CUDA
-    cudaFree(0);
+    // Inizializza il runtime CUDA
+    cudaFree(0);  // Forza l'inizializzazione del context CUDA
+
+    // Esegue e misura l'elaborazione CUDA
     auto t3 = std::chrono::high_resolution_clock::now();
     bool cudaResult = inputImage.applyFilterParallel(outputCUDA, filter, memType);
     auto t4 = std::chrono::high_resolution_clock::now();
@@ -112,11 +141,15 @@ int main(int argc, char** argv) {
         outputCUDA.saveImageToFile(outputCudaPath.c_str());
     }
 
-    // === Sezione Elaborazione OpenMP ===
+    /**
+     * Test Elaborazione OpenMP (CPU Multi-thread)
+     * Esegue test con numero crescente di thread
+     */
     std::cout << "\n=== Versione Parallela OpenMP ===" << std::endl;
     int maxThreads = omp_get_max_threads();
     std::cout << "Numero massimo di thread disponibili: " << maxThreads << std::endl;
 
+    // Test con diversi numeri di thread (potenze di 2)
     for (int numThreads = 2; numThreads <= maxThreads; numThreads *= 2) {
         ImageProcessor outputOMP;
         auto t5 = std::chrono::high_resolution_clock::now();
@@ -128,6 +161,7 @@ int main(int argc, char** argv) {
             std::cout << "Tempo di esecuzione OpenMP (" << numThreads << " threads): "
                 << ompDuration << " microsec" << std::endl;
 
+            // Salva il risultato
             std::string outputOmpPath = OUTPUT_DIR + std::string("omp") +
                 std::to_string(numThreads) + "_" +
                 cmdFilter + IMG_EXT;
@@ -136,7 +170,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    // === Sezione Test di Performance ===
+    /**
+     * Esecuzione dei test di performance
+     * Avvia una serie di test di performance più dettagliati
+     */
     std::cout << "\n=== Test di Performance ===" << std::endl;
     runPerformanceTests("", filter);  // I parametri non vengono più usati ma manteniamo la compatibilità
 
